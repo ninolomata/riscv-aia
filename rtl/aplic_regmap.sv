@@ -119,6 +119,13 @@ import aplic_pkg::*;
     end
   endfunction
 
+  function automatic bit check_source_visible (input logic[AplicCfg.NrSourcesW-1:0] source_idx,
+                                                input logic[AplicCfg.NrDomainsW-1:0] domain_idx);
+    check_source_visible = check_source_domain(source_idx, domain_idx) ||
+                           domain_is_parent(int'(domain_idx),
+                                            AplicCfg.DomainsCfg[intp_domain_i[source_idx]].ParentID);
+  endfunction
+
   function automatic domain_idx_t search_child_idx (input domain_idx_t domain_idx, input domain_idx_t child_idx);
     search_child_idx = 0;
     for (int j = 0; j < AplicCfg.NrDomains; j++) begin
@@ -268,8 +275,9 @@ always_comb begin
           o_domaincfg[target_domain].ie     = i_req.wdata[DOMAINCFG_IE_OFF];
           o_domaincfg_we[target_domain]      = 1'b1;
         end
-        ['h4: 'h4 + ('h4 * (AplicCfg.NrSources-1))]: begin
-          if (check_source_domain(target_source, target_domain)) begin
+        ['h4: 'h4 * (AplicCfg.NrSources-1)]: begin
+          if ((target_source != '0) && (target_source < AplicCfg.NrSources) &&
+              check_source_visible(target_source, target_domain)) begin
             o_sourcecfg[target_source].d     = i_req.wdata[10];
             if (o_sourcecfg[target_source].d) begin
               // devia verificar se o index é válido?
@@ -357,8 +365,9 @@ always_comb begin
           end
         end
         `endif
-        ['h3004 : 'h3004 + ('h4 * (AplicCfg.NrSources-1))]: begin
-          if (check_source_domain(target_source, target_domain)) begin
+        ['h3004 : 'h3000 + ('h4 * (AplicCfg.NrSources-1))]: begin
+          if ((target_source != '0) && (target_source < AplicCfg.NrSources) &&
+              check_source_domain(target_source, target_domain)) begin
             o_target[target_source].hi     = i_req.wdata[TARGET_HI_OFF +: TARGET_HI_LEN];
 
             if (AplicCfg.DeliveryMode == DOMAIN_IN_DIRECT_MODE) begin
@@ -372,7 +381,7 @@ always_comb begin
           end
         end
         `ifdef DIRECT_MODE
-        ['h4000 : 'h4000 + (('h1f) * (AplicCfg.NrHarts))]: begin
+        ['h4000 : 'h4000 + (('h20) * (AplicCfg.NrHarts))-1]: begin
           if ((AplicCfg.NrHarts != 0) &&
               (AplicCfg.DeliveryMode == DOMAIN_IN_DIRECT_MODE)) begin
             unique case (target_idc_reg)
@@ -409,7 +418,7 @@ always_comb begin
           o_resp.rdata[DOMAINCFG_DM_OFF] = i_domaincfg[target_domain].dm;
           o_resp.rdata[DOMAINCFG_BE_OFF] = i_domaincfg[target_domain].be;
         end
-        ['h4: 'h4 + ('h4 * (AplicCfg.NrSources-1))]: begin
+        ['h4: 'h4 * (AplicCfg.NrSources-1)]: begin
           if (check_source_domain(target_source, target_domain)) begin
             o_resp.rdata[10]  = i_sourcecfg[target_source].d;
             o_resp.rdata[2:0] = i_sourcecfg[target_source].ddf.nd.sm;
@@ -464,11 +473,10 @@ always_comb begin
         'h1fdc: begin
           o_resp.rdata[31:0]     = '0;
         end
-        'h2000: begin
-          o_resp.rdata[31:0]     = i_setipnum_le[target_domain][31:0];
-        end
+        'h2000,
         'h2004: begin
-          o_resp.rdata[31:0]     = i_setipnum_be[target_domain][31:0];
+          // setipnum_le and setipnum_be are write-only aliases.
+          o_resp.rdata[31:0] = '0;
         end
         `ifdef MSI_MODE
         'h3000: begin
@@ -479,9 +487,10 @@ always_comb begin
           end
         end
         `endif
-        ['h3004 : 'h3004 + ('h4 * (AplicCfg.NrSources-1))]: begin
+        ['h3004 : 'h3000 + ('h4 * (AplicCfg.NrSources-1))]: begin
           // the else case is return all zeros, alreay covered by the reset value
-          if (check_source_domain(target_source, target_domain)) begin
+          if ((target_source != '0) && (target_source < AplicCfg.NrSources) &&
+              check_source_domain(target_source, target_domain)) begin
             o_resp.rdata[TARGET_HI_OFF +: TARGET_HI_LEN] = i_target[target_source].hi;
             if (AplicCfg.DeliveryMode == DOMAIN_IN_DIRECT_MODE) begin
               o_resp.rdata[TARGET_IPRIO_OFF +: TARGET_IPRIO_LEN] = i_target[target_source].dmdf.df.iprio;
@@ -527,4 +536,3 @@ always_comb begin
   end
 end
 endmodule
-

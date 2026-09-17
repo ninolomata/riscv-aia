@@ -70,6 +70,7 @@ import aplic_pkg::*;
 // =============== Register Map instantiation ==============
     intp_domain_t   [AplicCfg.NrSources-1:1] intp_domain_d, intp_domain_q;
     aia_bitmap_t    [NR_REG:0]               active;
+    clrip_t         [NR_REG:0]               rectified_src;
     // Register domaincfg
     domaincfg_t                              domaincfg_q    [AplicCfg.NrDomains-1:0]; 
     domaincfg_t                              domaincfg_d    [AplicCfg.NrDomains-1:0];
@@ -93,9 +94,12 @@ import aplic_pkg::*;
     setipnum_t                               setipnum_d;
     setipnum_t                               setipnum_o      [AplicCfg.NrDomains-1:0];
     logic                                    setipnum_we     [AplicCfg.NrDomains-1:0];
+    setipnum_le_t                            setipnum_le_o   [AplicCfg.NrDomains-1:0];
+    logic                                    setipnum_le_we  [AplicCfg.NrDomains-1:0];
     logic                                    setipnum_final_we;
+    logic                                    setipnum_valid;
     // Register in_clrip
-    clrip_t         [NR_REG:0]               in_clrip_q, in_clrip_d;
+    clrip_t         [NR_REG:0]               in_clrip_d;
     clrip_t         [NR_REG:0]               in_clrip_o;
     logic           [NR_REG:0]               in_clrip_we;
     logic           [NR_REG:0]               clrip_final_we;
@@ -104,6 +108,7 @@ import aplic_pkg::*;
     clripnum_t                               clripnum_o      [AplicCfg.NrDomains-1:0];
     logic                                    clripnum_we     [AplicCfg.NrDomains-1:0];
     logic                                    clripnum_final_we;
+    logic                                    clripnum_valid;
     // Register setie
     setie_t         [NR_REG:0]               setie_q, setie_d;
     setie_t         [3:0][NR_REG:0]          setie_mux0_in;
@@ -116,6 +121,7 @@ import aplic_pkg::*;
     setienum_t                               setienum_o      [AplicCfg.NrDomains-1:0];
     logic                                    setienum_we     [AplicCfg.NrDomains-1:0];
     logic                                    setienum_final_we;
+    logic                                    setienum_valid;
     // Register clrie
     clrie_t         [NR_REG:0]               clrie_d;
     clrie_t         [NR_REG:0]               clrie_mux0_i1;
@@ -126,6 +132,7 @@ import aplic_pkg::*;
     clrienum_t                               clrienum_o      [AplicCfg.NrDomains-1:0];
     logic                                    clrienum_we     [AplicCfg.NrDomains-1:0];
     logic                                    clrienum_final_we;
+    logic                                    clrienum_valid;
     // Register target
     target_t        [AplicCfg.NrSources-1:1] target_q;
     target_t        [AplicCfg.NrSources-1:1] target_d;
@@ -154,8 +161,6 @@ import aplic_pkg::*;
     ithreshold_t    [AplicCfg.NrHarts-1:0]   ithreshold_o    [AplicCfg.NrDomains-1:0];
     logic           [AplicCfg.NrHarts-1:0]   ithreshold_we   [AplicCfg.NrDomains-1:0];
     // Register: topi
-    claimi_t        [AplicCfg.NrHarts-1:0]   topi_d          [AplicCfg.NrDomains-1:0];
-    claimi_t        [AplicCfg.NrHarts-1:0]   topi_q          [AplicCfg.NrDomains-1:0];
     // Register: claimi
     logic           [AplicCfg.NrHarts-1:0]   claimi_re       [AplicCfg.NrDomains-1:0];
     logic           [AplicCfg.NrHarts-1:0]   claimi_re_q     [AplicCfg.NrDomains-1:0];
@@ -204,7 +209,7 @@ import aplic_pkg::*;
     .o_setipnum             ( setipnum_o        ),
     .o_setipnum_we          ( setipnum_we       ),
     // Register: in_clrip
-    .i_in_clrip             ( in_clrip_q        ),
+    .i_in_clrip             ( rectified_src     ),
     .o_in_clrip             ( in_clrip_o        ),
     .o_in_clrip_we          ( in_clrip_we       ),
     // Register: clripnum
@@ -225,8 +230,8 @@ import aplic_pkg::*;
     .o_clrienum_we          ( clrienum_we       ),
     // Register: setipnum_le
     .i_setipnum_le          (),
-    .o_setipnum_le          (),
-    .o_setipnum_le_we       (),
+    .o_setipnum_le          ( setipnum_le_o     ),
+    .o_setipnum_le_we       ( setipnum_le_we    ),
     // Register: setipnum_be
     .i_setipnum_be          (),
     .o_setipnum_be          (),
@@ -250,8 +255,8 @@ import aplic_pkg::*;
     .i_ithreshold           ( ithreshold_q      ),               
     .o_ithreshold           ( ithreshold_o      ),               
     .o_ithreshold_we        ( ithreshold_we     ),                   
-    .i_topi                 ( topi_q            ),       
-    .i_claimi               ( topi_q            ),           
+    .i_topi                 ( i_topi            ),
+    .i_claimi               ( i_topi            ),
     .o_claimi_re            ( claimi_re         ),               
     `endif
     // AXI port
@@ -280,6 +285,17 @@ import aplic_pkg::*;
     assign o_active = active;
 // ================================================================
 
+// ======================= RECTIFIED INPUTS =======================
+    // The in_clrip read path is architectural state, not the history used by
+    // the edge detector. Source zero is reserved and reads as zero.
+    always_comb begin
+        rectified_src = '0;
+        for (int j = 1; j < AplicCfg.NrSources; j++) begin
+            rectified_src[j/32][j%32] = i_rectified_src[j];
+        end
+    end
+// ================================================================
+
 // ========================= DOMAINCFG ============================
     for (genvar i = 0; i < AplicCfg.NrDomains; i++) begin
         assign domaincfg_d[i] = (domaincfg_we[i]) ? domaincfg_o[i] : domaincfg_q[i];
@@ -289,21 +305,24 @@ import aplic_pkg::*;
 // ================================================================
 
 // ========================= SOURCECFG ============================
-    logic zero_reg;
     always_comb begin
         intp_domain_d   = intp_domain_q;
-        zero_reg        = '0;
         for (int j = 1; j < AplicCfg.NrSources; j++) begin
-            if (sourcecfg_we[j] && sourcecfg_o[j].d) begin
-                if (!domain_is_leaf(intp_domain_q[j])) begin
-                    intp_domain_d[j] = intp_domain_t'(AplicCfg.DomainsCfg[intp_domain_q[j]].ChildsIdx[sourcecfg_o[j].ddf.ci]);
-                end else begin
-                    zero_reg = 1'b1;
-                end
-            end else if (sourcecfg_we[j] && !sourcecfg_o[j].d) begin 
-                if (domain_is_parent(int'(target_domain), AplicCfg.DomainsCfg[intp_domain_q[j]].ParentID)) begin
-                    intp_domain_d[j] = intp_domain_t'(AplicCfg.DomainsCfg[intp_domain_q[j]].ParentID);
-                end
+            if (sourcecfg_we[j] && sourcecfg_o[j].d &&
+                !domain_is_leaf(target_domain) &&
+                (sourcecfg_o[j].ddf.ci < AplicCfg.DomainsCfg[target_domain].NrChilds) &&
+                ((intp_domain_q[j] == target_domain) ||
+                 domain_is_parent(int'(target_domain),
+                                  AplicCfg.DomainsCfg[intp_domain_q[j]].ParentID))) begin
+                intp_domain_d[j] = intp_domain_t'(
+                    AplicCfg.DomainsCfg[target_domain].ChildsIdx[sourcecfg_o[j].ddf.ci]);
+            end else if (sourcecfg_we[j] &&
+                         domain_is_parent(int'(target_domain),
+                                          AplicCfg.DomainsCfg[intp_domain_q[j]].ParentID) &&
+                         !sourcecfg_o[j].d) begin
+                // The parent reclaims a source by writing D=0.
+                intp_domain_d[j] = intp_domain_t'(
+                    AplicCfg.DomainsCfg[intp_domain_q[j]].ParentID);
             end
         end
     end
@@ -311,18 +330,29 @@ import aplic_pkg::*;
     assign o_intp_domain = intp_domain_q;
 
     always_comb begin :sourcecfg_logic
-        /** reset value */
-        for (int i = 1; i < AplicCfg.NrSources; i++) begin
-            sourcecfg_mux3_i0[i].d = '0;
-            sourcecfg_mux3_i0[i].ddf.ci = '0;
-        end
+        sourcecfg_mux3_i0 = '0;
         sourcecfg_d         = sourcecfg_q;
         sourcecfg_final_we  = '0;
 
         for (int j = 1; j < AplicCfg.NrSources; j++) begin
-            if (intp_domain_d[j] == target_domain) begin
-                sourcecfg_mux3_i0[j]    = (zero_reg) ? '0 : sourcecfg_o[j];
-                sourcecfg_final_we[j]   = sourcecfg_we[j];
+            if (sourcecfg_we[j]) begin
+                sourcecfg_mux3_i0[j] = sourcecfg_o[j];
+                if (sourcecfg_o[j].d &&
+                    (domain_is_leaf(target_domain) ||
+                     (sourcecfg_o[j].ddf.ci >= AplicCfg.DomainsCfg[target_domain].NrChilds))) begin
+                    // A leaf cannot delegate; the attempted write becomes zero.
+                    sourcecfg_mux3_i0[j] = '0;
+                end else if (sourcecfg_o[j].d &&
+                             (intp_domain_d[j] != intp_domain_q[j])) begin
+                    // A source newly delegated to a child is inactive there
+                    // until the child configures it.
+                    sourcecfg_mux3_i0[j] = '0;
+                end
+                if ((intp_domain_q[j] == target_domain) ||
+                    domain_is_parent(int'(target_domain),
+                                     AplicCfg.DomainsCfg[intp_domain_q[j]].ParentID)) begin
+                    sourcecfg_final_we[j]   = sourcecfg_we[j];
+                end
             end
             sourcecfg_d[j] = (sourcecfg_final_we[j]) ? sourcecfg_mux3_i0[j] : sourcecfg_q[j];
         end
@@ -338,6 +368,10 @@ import aplic_pkg::*;
 
         setipnum_d          = setipnum_o[target_domain];
         setipnum_final_we   = setipnum_we[target_domain];
+        if (setipnum_le_we[target_domain]) begin
+            setipnum_d        = setipnum_le_o[target_domain];
+            setipnum_final_we = 1'b1;
+        end
     end
     always_comb begin : clripnum_logic
         clripnum_d          = '0;
@@ -350,15 +384,31 @@ import aplic_pkg::*;
         in_clrip_d =  '0;
         in_clrip_d[target_source_reg] = in_clrip_o[target_source_reg];
     end
+    always_comb begin : pending_number_validity
+        setipnum_valid = 1'b0;
+        clripnum_valid = 1'b0;
+        if (setipnum_final_we && (setipnum_d != '0) &&
+            (setipnum_d < AplicCfg.NrSources) &&
+            (intp_domain_q[setipnum_d] == target_domain) &&
+            active[setipnum_d/32][setipnum_d%32]) begin
+            setipnum_valid = 1'b1;
+        end
+        if (clripnum_final_we && (clripnum_d != '0) &&
+            (clripnum_d < AplicCfg.NrSources) &&
+            (intp_domain_q[clripnum_d] == target_domain) &&
+            active[clripnum_d/32][clripnum_d%32]) begin
+            clripnum_valid = 1'b1;
+        end
+    end
     always_comb begin : setip_control_unit
         setip_select_i = DEFAULT;
         if (|setip_we) begin
             setip_select_i = SETIX;
         end else if (|in_clrip_we) begin
             setip_select_i = CLRIX;
-        end else if (setipnum_final_we) begin
+        end else if (setipnum_valid) begin
             setip_select_i = SETIXNUM;
-        end else if (clripnum_final_we) begin
+        end else if (clripnum_valid) begin
             setip_select_i = CLRIXNUM;
         end
     end
@@ -408,15 +458,31 @@ import aplic_pkg::*;
         clrie_d =  '0;
         clrie_d[target_source_reg] = clrie_o[target_source_reg];
     end
+    always_comb begin : enable_number_validity
+        setienum_valid = 1'b0;
+        clrienum_valid = 1'b0;
+        if (setienum_final_we && (setienum_d != '0) &&
+            (setienum_d < AplicCfg.NrSources) &&
+            (intp_domain_q[setienum_d] == target_domain) &&
+            active[setienum_d/32][setienum_d%32]) begin
+            setienum_valid = 1'b1;
+        end
+        if (clrienum_final_we && (clrienum_d != '0) &&
+            (clrienum_d < AplicCfg.NrSources) &&
+            (intp_domain_q[clrienum_d] == target_domain) &&
+            active[clrienum_d/32][clrienum_d%32]) begin
+            clrienum_valid = 1'b1;
+        end
+    end
     always_comb begin : setie_control_unit
         setie_select_i = DEFAULT;
         if (|setie_we) begin
             setie_select_i = SETIX;
         end else if (|clrie_we) begin
             setie_select_i = CLRIX;
-        end else if (setienum_final_we) begin
+        end else if (setienum_valid) begin
             setie_select_i = SETIXNUM;
-        end else if (clrienum_final_we) begin
+        end else if (clrienum_valid) begin
             setie_select_i = CLRIXNUM;
         end
     end
@@ -463,7 +529,14 @@ import aplic_pkg::*;
     end
   end
 
-  assign o_target = target_q;
+  always_comb begin
+    o_target = '0;
+    for (int j = 1; j < AplicCfg.NrSources; j++) begin
+      if (active[j/32][j%32]) begin
+        o_target[j] = target_q[j];
+      end
+    end
+  end
 // ================================================================
 
 // ===================== CLAIMED FORWARDED ========================
@@ -473,7 +546,9 @@ import aplic_pkg::*;
         for (int i = 0; i < AplicCfg.NrDomains; i++) begin
             for (int j = 0; j < AplicCfg.NrHarts; j++) begin
                 if ((claimi_re[i][j] == 1'b1) && (claimi_re_q[i][j] == 1'b0)) begin
-                    o_claimed_or_forwarded[topi_q[i][j].iid/32][topi_q[i][j].iid%32] = 1'b1;
+                    if (i_topi[i][j].iid != '0) begin
+                        o_claimed_or_forwarded[i_topi[i][j].iid/32][i_topi[i][j].iid%32] = 1'b1;
+                    end
                 end 
             end 
         end
@@ -498,7 +573,7 @@ import aplic_pkg::*;
             for (int j = 0; j < AplicCfg.NrHarts; j++) begin
                 if (iforce_we[i][j]) begin
                     iforce_ctl[i][j] = W_FORCE;
-                end else if (claimi_re[i][j] && (topi_q[i][j] == 0)) begin
+                end else if (claimi_re[i][j] && (i_topi[i][j].iid == '0)) begin
                     iforce_ctl[i][j] = ZERO_FORCE;
                 end else begin
                     iforce_ctl[i][j] = DEFAULT;
@@ -512,8 +587,6 @@ import aplic_pkg::*;
             for (int j = 0; j < AplicCfg.NrHarts; j++) begin
                 idelivery_d[i][j]       = (idelivery_we[i][j]) ? idelivery_o[i][j] : idelivery_q[i][j];
                 ithreshold_d[i][j]      = (ithreshold_we[i][j]) ? ithreshold_o[i][j] : ithreshold_q[i][j];
-                topi_d[i][j]            = ((i_topi_update[i][j]) || 
-                                          ((i_topi[i][j] == 0) && (claimi_re[i][j]||claimi_re_q[i][j]))) ? i_topi[i][j] : topi_q[i][j];
                 case (iforce_ctl[i][j])
                     ZERO_FORCE: iforce_d[i][j]  = '0;
                     W_FORCE:    iforce_d[i][j]  = iforce_o[i][j]; 
@@ -554,7 +627,6 @@ import aplic_pkg::*;
     if (!ni_rst) begin
         sourcecfg_q         <= '0;
         setip_q             <= '0;
-        in_clrip_q          <= '0;
         setie_q             <= '0;
         target_q            <= '0;
         intp_domain_q       <= '0;
@@ -565,7 +637,6 @@ import aplic_pkg::*;
             `elsif DIRECT_MODE
             idelivery_q[i]         <= '0;
             ithreshold_q[i]        <= '0;
-            topi_q[i]              <= '0;
             iforce_q[i]            <= '0;
             claimi_re_q[i]         <= '0;
             `endif
@@ -574,7 +645,6 @@ import aplic_pkg::*;
         domaincfg_q         <= domaincfg_d;
         intp_domain_q       <= intp_domain_d;
         sourcecfg_q         <= sourcecfg_d;
-        in_clrip_q          <= in_clrip_d;
         setip_q             <= setip_d;
         setie_q             <= setie_d;
         target_q            <= target_d;
@@ -583,7 +653,6 @@ import aplic_pkg::*;
         `elsif DIRECT_MODE
         idelivery_q         <= idelivery_d;         
         ithreshold_q        <= ithreshold_d;             
-        topi_q              <= topi_d;     
         iforce_q            <= iforce_d;         
         claimi_re_q         <= claimi_re;         
         `endif

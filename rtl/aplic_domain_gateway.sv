@@ -93,6 +93,7 @@ import aplic_pkg::*;
 
     /** Rectify the input*/
     always_comb begin
+        rectified_src = '0;
         for (int i = 1; i < AplicCfg.NrSources; i++) begin
             if ((i_sourcecfg[i].ddf.nd.sm == APLIC_SM_INACTIVE) || (i_sourcecfg[i].ddf.nd.sm == APLIC_SM_DETACHED)) begin
                 rectified_src[i] = 0;
@@ -102,7 +103,9 @@ import aplic_pkg::*;
         end
     end
 
-    assign o_rectified_src = rectified_src_q;
+    // in_clrip reads must expose the current rectified input. Keep the
+    // registered value exclusively for edge detection below.
+    assign o_rectified_src = rectified_src;
 
     /** Select the new interrupt */
     for (genvar i = 1 ; i < AplicCfg.NrSources; i++) begin    
