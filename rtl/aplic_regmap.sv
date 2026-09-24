@@ -110,22 +110,6 @@ import aplic_pkg::*;
   output reg_rsp_t                    o_resp
 );
 
-  function automatic bit check_source_domain (input logic[AplicCfg.NrSourcesW-1:0] source_idx, 
-                                              input logic[AplicCfg.NrDomainsW-1:0] domain_idx);
-    if (intp_domain_i[source_idx] == domain_idx) begin
-      check_source_domain = 1;
-    end else begin
-      check_source_domain = 0;
-    end
-  endfunction
-
-  function automatic bit check_source_visible (input logic[AplicCfg.NrSourcesW-1:0] source_idx,
-                                                input logic[AplicCfg.NrDomainsW-1:0] domain_idx);
-    check_source_visible = check_source_domain(source_idx, domain_idx) ||
-                           domain_is_parent(int'(domain_idx),
-                                            AplicCfg.DomainsCfg[intp_domain_i[source_idx]].ParentID);
-  endfunction
-
   function automatic domain_idx_t search_child_idx (input domain_idx_t domain_idx, input domain_idx_t child_idx);
     search_child_idx = 0;
     for (int j = 0; j < AplicCfg.NrDomains; j++) begin
@@ -159,6 +143,32 @@ import aplic_pkg::*;
 
   logic [AplicCfg.NrDomains-1:0][NR_REG:0][31:0] en_in_domain;
 
+  // Decode ownership with constant source/domain indices. In particular, do
+  // not nest a function reading intp_domain_i inside the parent-visibility
+  // function: Vivado 2020.2 produced a child-rejecting gate for that form.
+  // Keep owner access and parent access separate, including in readback.
+  logic [AplicCfg.NrSources-1:0] source_in_domain;
+  logic [AplicCfg.NrSources-1:0] source_in_parent_domain;
+  assign source_in_domain[0] = 1'b0;
+  assign source_in_parent_domain[0] = 1'b0;
+  for (genvar source = 1; source < AplicCfg.NrSources; source++) begin : gen_source_access
+    logic [AplicCfg.NrDomains-1:0] parent_match;
+    assign source_in_domain[source] =
+        (intp_domain_i[source] == intp_domain_t'(target_domain));
+    for (genvar owner = 0; owner < AplicCfg.NrDomains; owner++) begin : gen_parent_access
+      if ((AplicCfg.DomainsCfg[owner].ParentID >= 0) &&
+          (AplicCfg.DomainsCfg[owner].ParentID < AplicCfg.NrDomains)) begin : gen_has_parent
+        assign parent_match[owner] =
+            (intp_domain_i[source] == intp_domain_t'(owner)) &&
+            (target_domain == domain_idx_t'(AplicCfg.DomainsCfg[owner].ParentID));
+      end else begin : gen_no_parent
+        // Root ParentID=-1 must not be truncated into a valid domain ID.
+        assign parent_match[owner] = 1'b0;
+      end
+    end
+    assign source_in_parent_domain[source] = |parent_match;
+  end
+
   assign target_domain_o = target_domain;
   assign target_source_reg_o = target_source_reg;
 
@@ -189,7 +199,7 @@ import aplic_pkg::*;
     // We believe that this can impove hardware resources becuse we can now just use the register and save on some gates
     for (int i = 0; i < AplicCfg.NrDomains; i++) begin 
       for (int j = 1; j < AplicCfg.NrSources; j++) begin 
-        if (check_source_domain(AplicCfg.NrSourcesW'(j), AplicCfg.NrDomainsW'(i))) begin
+        if ((intp_domain_i[j] == intp_domain_t'(i))) begin
           en_in_domain[i][j/32][j%32] = 1'b1;
         end
       end 
@@ -277,7 +287,7 @@ always_comb begin
         end
         ['h4: 'h4 * (AplicCfg.NrSources-1)]: begin
           if ((target_source != '0) && (target_source < AplicCfg.NrSources) &&
-              check_source_visible(target_source, target_domain)) begin
+              (source_in_domain[target_source] || source_in_parent_domain[target_source])) begin
             o_sourcecfg[target_source].d     = i_req.wdata[10];
             if (o_sourcecfg[target_source].d) begin
               // devia verificar se o index é válido?
@@ -287,9 +297,8 @@ always_comb begin
                 o_sourcecfg[target_source].ddf.nd.sm = sourcecfg_sm_t'(i_req.wdata[2:0]);
               end
             end
+            o_sourcecfg_we[target_source] = 1'b1;
           end
-
-          o_sourcecfg_we[target_source]      = 1'b1;
         end
         'h1bc0: begin
           if (check_domain_m_level(domain_idx_t'(target_domain))) begin
@@ -367,7 +376,7 @@ always_comb begin
         `endif
         ['h3004 : 'h3000 + ('h4 * (AplicCfg.NrSources-1))]: begin
           if ((target_source != '0) && (target_source < AplicCfg.NrSources) &&
-              check_source_domain(target_source, target_domain)) begin
+              source_in_domain[target_source]) begin
             o_target[target_source].hi     = i_req.wdata[TARGET_HI_OFF +: TARGET_HI_LEN];
 
             if (AplicCfg.DeliveryMode == DOMAIN_IN_DIRECT_MODE) begin
@@ -419,11 +428,11 @@ always_comb begin
           o_resp.rdata[DOMAINCFG_BE_OFF] = i_domaincfg[target_domain].be;
         end
         ['h4: 'h4 * (AplicCfg.NrSources-1)]: begin
-          if (check_source_domain(target_source, target_domain)) begin
+          if (source_in_domain[target_source]) begin
             o_resp.rdata[10]  = i_sourcecfg[target_source].d;
             o_resp.rdata[2:0] = i_sourcecfg[target_source].ddf.nd.sm;
           end else begin
-            if (domain_is_parent(int'(target_domain), AplicCfg.DomainsCfg[intp_domain_i[target_source]].ParentID)) begin
+            if (source_in_parent_domain[target_source]) begin
               o_resp.rdata[10] = 'h1;
               o_resp.rdata[AplicCfg.NrDomainsW-1:0] = search_child_idx(target_domain, intp_domain_i[target_source]);
             end
@@ -490,7 +499,7 @@ always_comb begin
         ['h3004 : 'h3000 + ('h4 * (AplicCfg.NrSources-1))]: begin
           // the else case is return all zeros, alreay covered by the reset value
           if ((target_source != '0) && (target_source < AplicCfg.NrSources) &&
-              check_source_domain(target_source, target_domain)) begin
+              source_in_domain[target_source]) begin
             o_resp.rdata[TARGET_HI_OFF +: TARGET_HI_LEN] = i_target[target_source].hi;
             if (AplicCfg.DeliveryMode == DOMAIN_IN_DIRECT_MODE) begin
               o_resp.rdata[TARGET_IPRIO_OFF +: TARGET_IPRIO_LEN] = i_target[target_source].dmdf.df.iprio;
